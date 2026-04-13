@@ -28,25 +28,37 @@ jobs:
         with:
           registry-type: public
 
-      - name: Pull, Create Repo and Push
+      - name: Pull and Push
         run: |
-          SOURCE_IMAGE=${{ github.event.inputs.source_image }}
+          SOURCE_IMAGE="${{ github.event.inputs.source_image }}"
 
-          # 提取镜像名称 (去掉 registry 和 tag)
-          # 例如: docker.io/library/alpine:latest -> alpine
-          REPO_NAME=$(echo $SOURCE_IMAGE | awk -F'/' '{print $NF}' | cut -d':' -f1)
-          IMAGE_TAG=$(echo $SOURCE_IMAGE | grep ":" && echo $SOURCE_IMAGE | cut -d':' -f2 || echo "latest")
-          REGISTRY_URL=${{ steps.login-ecr-public.outputs.registry }}
+          if [[ "$SOURCE_IMAGE" == *":"* ]]; then
+            IMAGE_TAG="${SOURCE_IMAGE##*:}"           # 取最后一个冒号后面的部分
+            IMAGE_WITHOUT_TAG="${SOURCE_IMAGE%:*}"    # 剥离 Tag 部分
+            REPO_NAME="${IMAGE_WITHOUT_TAG##*/}"      # 取最后一个斜杠后面的部分
+          else
+            IMAGE_TAG="latest"
+            REPO_NAME="${SOURCE_IMAGE##*/}"
+          fi
+
+          REGISTRY_URL="${{ steps.login-ecr-public.outputs.registry }}"
+
           TARGET_IMAGE="$REGISTRY_URL/$REPO_NAME:$IMAGE_TAG"
 
-          echo "开始处理仓库: $REPO_NAME"
+          # 打印调试信息，让 CI 日志一目了然
+          echo "=== 解析结果 ==="
+          echo "源镜像:   $SOURCE_IMAGE"
+          echo "仓库名:   $REPO_NAME"
+          echo "标签:     $IMAGE_TAG"
+          echo "目标镜像: $TARGET_IMAGE"
+          echo "================"
 
           # 1. 检查是否存在，不存在则创建
           if ! aws ecr-public describe-repositories --repository-names "$REPO_NAME" --region us-east-1 > /dev/null 2>&1; then
-            echo "未发现仓库，正在创建..."
+            echo "未发现仓库 [$REPO_NAME]，正在创建..."
             aws ecr-public create-repository --repository-name "$REPO_NAME" --region us-east-1
 
-            # 2. 关键等待逻辑：轮询检查仓库是否已就绪
+            # 2. 轮询等待逻辑
             echo "等待仓库创建成功确认..."
             MAX_RETRIES=10
             COUNT=0
@@ -60,14 +72,16 @@ jobs:
               echo "等待中... ($COUNT/$MAX_RETRIES)"
               sleep 2
             done
-            echo "仓库已就绪！"
+            echo "仓库 [$REPO_NAME] 已就绪！"
           else
-            echo "仓库已存在，跳过创建步骤。"
+            echo "仓库 [$REPO_NAME] 已存在，跳过创建步骤。"
           fi
 
           # 3. 镜像同步
           echo "开始拉取和推送镜像..."
-          docker pull $SOURCE_IMAGE
-          docker tag $SOURCE_IMAGE $TARGET_IMAGE
-          docker push $TARGET_IMAGE
-          echo "同步完成：$TARGET_IMAGE"
+
+          docker pull "$SOURCE_IMAGE"
+          docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE"
+          docker push "$TARGET_IMAGE"
+
+          echo "🎉 同步完成：$TARGET_IMAGE"
