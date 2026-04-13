@@ -29,9 +29,11 @@ jobs:
           registry-type: public
 
       - name: Pull and Push
+        env:
+          SOURCE_IMAGE: ${{ github.event.inputs.source_image }}
+          REGISTRY_URL: ${{ steps.login-ecr-public.outputs.registry }}
+          REGISTRY_ALIAS: ${{ secrets.AWS_PUBLIC_ECR_ALIAS }}
         run: |
-          SOURCE_IMAGE="${{ github.event.inputs.source_image }}"
-
           if [[ "$SOURCE_IMAGE" == *":"* ]]; then
             IMAGE_TAG="${SOURCE_IMAGE##*:}"           # 取最后一个冒号后面的部分
             IMAGE_WITHOUT_TAG="${SOURCE_IMAGE%:*}"    # 剥离 Tag 部分
@@ -41,9 +43,7 @@ jobs:
             REPO_NAME="${SOURCE_IMAGE##*/}"
           fi
 
-          REGISTRY_URL="${{ steps.login-ecr-public.outputs.registry }}"
-
-          TARGET_IMAGE="$REGISTRY_URL/$REPO_NAME:$IMAGE_TAG"
+          TARGET_IMAGE="$REGISTRY_URL/$REGISTRY_ALIAS/$REPO_NAME:$IMAGE_TAG"
 
           # 打印调试信息，让 CI 日志一目了然
           echo "=== 解析结果 ==="
