@@ -1,0 +1,51 @@
+name: ECR
+run-name: ${{ github.event.inputs.source_image }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_image:
+        description: '源镜像地址 (例如: nginx:latest 或 quay.io/libpod/alpine:latest)'
+        required: true
+        type: string
+
+permissions:
+  id-token: write # 必须：用于 OIDC 交换
+
+jobs:
+  sync:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1 # ECR Public 管理操作必须在 us-east-1 执行
+
+      - name: Login to Amazon ECR Public
+        id: login-ecr-public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Pull, Create Repo and Push
+        run: |
+          SOURCE_IMAGE=${{ github.event.inputs.source_image }}
+
+          # 提取镜像名称 (去掉 registry 和 tag)
+          # 例如: docker.io/library/alpine:latest -> alpine
+          REPO_NAME=$(echo $SOURCE_IMAGE | awk -F'/' '{print $NF}' | cut -d':' -f1)
+          IMAGE_TAG=$(echo $SOURCE_IMAGE | grep ":" && echo $SOURCE_IMAGE | cut -d':' -f2 || echo "latest")
+          REGISTRY_URL=${{ steps.login-ecr-public.outputs.registry }}
+          TARGET_IMAGE="$REGISTRY_URL/$REPO_NAME:$IMAGE_TAG"
+
+          echo "目标仓库: $REPO_NAME"
+          # 检查仓库是否存在，不存在则创建
+          # 必须显式指定 --region us-east-1
+          aws ecr-public describe-repositories --repository-names "$REPO_NAME" --region us-east-1 || \
+          aws ecr-public create-repository --repository-name "$REPO_NAME" --region us-east-1
+
+          # 执行同步
+          docker pull $SOURCE_IMAGE
+          docker tag $SOURCE_IMAGE $TARGET_IMAGE
+          docker push $TARGET_IMAGE
