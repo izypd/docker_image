@@ -106,7 +106,7 @@ jobs:
           # 3. 镜像构建
           echo "开始构建 Docker 镜像..."
           # 使用 --build-arg 传入动态获取的文件名，匹配 Dockerfile 中的 ARG
-          docker build --build-arg FILE_NAME="$FILE_NAME" -t "$TARGET_IMAGE" dl_file.Dockerfile
+          docker build --build-arg FILE_NAME="$FILE_NAME" -t "$TARGET_IMAGE" ./dl_file.Dockerfile
 
           # 4. 镜像推送
           echo "开始推送镜像到 ECR Public..."
