@@ -1,0 +1,115 @@
+name: dl_file to ECR
+run-name: ${{ github.event.inputs.image_name }}:${{ github.event.inputs.image_tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: "要下载的文件的 URL"
+        required: true
+        type: string
+      file_name:
+        description: "下载后保存的文件名 (例如: app.jar)"
+        required: true
+        type: string
+      image_name:
+        description: "Docker 镜像名称 (同时也是 ECR 仓库名，例如: my-custom-app)"
+        required: true
+        type: string
+      image_tag:
+        description: "Docker 镜像标签 (例如: v1.0.0 或 latest)"
+        required: true
+        type: string
+        default: "latest"
+
+permissions:
+  id-token: write # 必须：用于 OIDC 交换
+  contents: read # 允许检出代码
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      # 检出代码库以获取 Dockerfile
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # 下载文件并重命名
+      - name: Download File
+        env:
+          FILE_URL: ${{ github.event.inputs.file_url }}
+          FILE_NAME: ${{ github.event.inputs.file_name }}
+        run: |
+          echo "正在从 $FILE_URL 下载文件并保存为 $FILE_NAME ..."
+          # 使用 curl 下载文件，-L 跟随重定向，-o 指定输出文件名
+          curl -L "$FILE_URL" -o "$FILE_NAME"
+          echo "下载完成！文件信息："
+          ls -lh "$FILE_NAME"
+
+      # 配置 AWS 凭证
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1 # ECR Public 管理操作必须在 us-east-1 执行
+
+      # 登录到 Amazon ECR Public
+      - name: Login to Amazon ECR Public
+        id: login-ecr-public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      # 检查仓库、构建镜像并推送
+      - name: Build and Push Image
+        env:
+          FILE_NAME: ${{ github.event.inputs.file_name }}
+          REPO_NAME: ${{ github.event.inputs.image_name }}
+          IMAGE_TAG: ${{ github.event.inputs.image_tag }}
+          REGISTRY_URL: ${{ steps.login-ecr-public.outputs.registry }}
+          REGISTRY_ALIAS: ${{ secrets.AWS_PUBLIC_ECR_ALIAS }}
+        run: |
+          TARGET_IMAGE="$REGISTRY_URL/$REGISTRY_ALIAS/$REPO_NAME:$IMAGE_TAG"
+
+          # 打印调试信息，让 CI 日志一目了然
+          echo "=== 任务信息 ==="
+          echo "文件名称:   $FILE_NAME"
+          echo "仓库名称:   $REPO_NAME"
+          echo "镜像标签:   $IMAGE_TAG"
+          echo "目标镜像:   $TARGET_IMAGE"
+          echo "================"
+
+          # 1. 检查是否存在仓库，不存在则创建
+          if ! aws ecr-public describe-repositories --repository-names "$REPO_NAME" --region us-east-1 > /dev/null 2>&1; then
+            echo "未发现仓库 [$REPO_NAME]，正在创建..."
+            aws ecr-public create-repository --repository-name "$REPO_NAME" --region us-east-1
+
+            # 2. 轮询等待逻辑
+            echo "等待仓库创建成功确认..."
+            MAX_RETRIES=10
+            COUNT=0
+            until aws ecr-public describe-repositories --repository-names "$REPO_NAME" --region us-east-1 > /dev/null 2>&1
+            do
+              ((COUNT++))
+              if [ $COUNT -ge $MAX_RETRIES ]; then
+                echo "错误：等待仓库创建超时。"
+                exit 1
+              fi
+              echo "等待中... ($COUNT/$MAX_RETRIES)"
+              sleep 2
+            do
+            echo "仓库 [$REPO_NAME] 已就绪！"
+          else
+            echo "仓库 [$REPO_NAME] 已存在，跳过创建步骤。"
+          fi
+
+          # 3. 镜像构建
+          echo "开始构建 Docker 镜像..."
+          # 使用 --build-arg 传入动态获取的文件名，匹配 Dockerfile 中的 ARG
+          docker build --build-arg FILE_NAME="$FILE_NAME" -t "$TARGET_IMAGE" dl_file.Dockerfile
+
+          # 4. 镜像推送
+          echo "开始推送镜像到 ECR Public..."
+          docker push "$TARGET_IMAGE"
+
+          echo "🎉 构建与推送完成：$TARGET_IMAGE"
