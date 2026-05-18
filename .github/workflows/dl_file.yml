@@ -16,11 +16,11 @@ on:
         description: "Docker 镜像名称 (同时也是 ECR 仓库名，例如: my-custom-app)"
         required: true
         type: string
+        default: "catlover"
       image_tag:
         description: "Docker 镜像标签 (例如: v1.0.0 或 latest)"
         required: true
         type: string
-        default: "latest"
 
 permissions:
   id-token: write # 必须：用于 OIDC 交换
